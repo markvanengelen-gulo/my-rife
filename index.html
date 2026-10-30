@@ -78,23 +78,34 @@
     <ul id="list"></ul>
   </div>
 
-  <p class="warn">Most phone speakers and earbuds reproduce roughly 50 Hz – 18 kHz; tones outside that range may be silent. Keep volume moderate — long exposure to pure tones can strain hearing. Rife frequency lists are traditional and have no scientific evidence of any health effect; this is an audio tool, not a medical device.</p>
+  <p class="warn">Most phone speakers and earbuds reproduce roughly 50 Hz – 18 kHz; tones outside that range may be silent. Keep volume moderate — long exposure to pure tones can strain hearing. The Rife labels show what community lists (mainly the CAFL) claim each frequency is for. None of these claims has scientific evidence behind it. This is an audio tool, not a medical device. It does not treat any illness and is no substitute for medical care.</p>
 </main>
 
 <script>
-// Frequencies commonly found on published Rife lists, plus other well-known tone sets.
-// Labels are descriptive only; no health claims are made.
+// Rife categories as they appear on community lists (mainly the Consolidated Annotated
+// Frequency List, CAFL). These are the lists' own traditional claims — none are
+// scientifically supported. Frequencies under ~50 Hz or above ~18 kHz may be inaudible on phones.
+const RIFE = {
+  "Sleep & relaxation": [3, 7.83, 10, 304, 802, 880, 1550, 6000],
+  "Pain relief & sedation": [304],
+  "Cancer": [2008, 2127, 2128, 2050, 2180, 2452],
+  "Flu & colds": [728, 800, 880, 7760, 8000, 8250],
+  "Chronic fatigue": [465, 660, 666, 727, 787, 880, 1550, 2127],
+  "Epstein-Barr / mono": [660, 728, 787],
+  "Lyme disease": [450, 465, 652, 1103, 1500, 4200],
+  "Breathing / asthma": [1234, 3672, 7344],
+  "Nervous system & emotional balance": [6000],
+  "General wellness": [727, 728, 787, 880, 5000, 10000, 20000]
+};
+const rangeNote = hz => hz < 40 ? " (below speaker range)" : hz > 18000 ? " (above most speakers)" : "";
+const uses = {};
+for (const [cat, hzs] of Object.entries(RIFE)) for (const hz of hzs) (uses[hz] ||= []).push(cat);
+const label = hz => `${hz} Hz – ${uses[hz].join(", ")}${rangeNote(hz)}`;
+
 const PRESETS = {
-  "Rife – commonly cited set": [
-    [20, "20 Hz"], [72, "72 Hz"], [95, "95 Hz"], [125, "125 Hz"], [146, "146 Hz"],
-    [304, "304 Hz"], [440, "440 Hz"], [465, "465 Hz"], [660, "660 Hz"], [690, "690 Hz"],
-    [727, "727 Hz"], [728, "728 Hz"], [787, "787 Hz"], [800, "800 Hz"], [802, "802 Hz"],
-    [832, "832 Hz"], [880, "880 Hz"], [1550, "1550 Hz"], [1800, "1800 Hz"], [2008, "2008 Hz"],
-    [2127, "2127 Hz"], [2489, "2489 Hz"], [2720, "2720 Hz"], [5000, "5000 Hz"], [10000, "10000 Hz"]
-  ],
-  "Rife – 'general' sequence (727 / 787 / 880 / 5000 / 10000)": [
-    [727, "727 Hz"], [787, "787 Hz"], [880, "880 Hz"], [5000, "5000 Hz"], [10000, "10000 Hz"]
-  ],
+  "Rife – all frequencies": Object.keys(uses).map(Number).sort((a, b) => a - b).map(hz => [hz, label(hz)]),
+  ...Object.fromEntries(Object.entries(RIFE).map(([cat, hzs]) =>
+    [`Rife – ${cat}`, hzs.map(hz => [hz, label(hz)])])),
   "Solfeggio tones": [
     [174, "174 Hz"], [285, "285 Hz"], [396, "396 Hz"], [417, "417 Hz"], [528, "528 Hz"],
     [639, "639 Hz"], [741, "741 Hz"], [852, "852 Hz"], [963, "963 Hz"]
