@@ -51,7 +51,7 @@
 #define TOUCH_MIRROR_X 0
 #define TOUCH_MIRROR_Y 0
 
-#define SAMPLE_RATE     44100
+#define SAMPLE_RATE     96000   // 96 kHz: ~4.8 samples per cycle even at 20 kHz
 #define VIBE_BELOW_HZ   40.0f
 #define SCREEN_TIMEOUT  20000
 
@@ -119,7 +119,10 @@ static volatile float g_amp  = 0.0f;
 void audioTask(void *) {
   const int N = 256;
   static int16_t buf[N * 2];
-  float phase = 0, cur = 0;
+  // Exact 32-bit phase accumulator: frequency resolution of SAMPLE_RATE / 2^32
+  // (~0.00002 Hz) and no drift, however long a tone plays.
+  uint32_t phase = 0;
+  float cur = 0;
   bool running = true;
   for (;;) {
     float target = g_tone ? g_amp : 0.0f;
@@ -130,13 +133,13 @@ void audioTask(void *) {
       continue;
     }
     if (!running) { i2s_start(I2S_NUM_0); running = true; }
-    const float step = g_freq / SAMPLE_RATE;
+    const uint32_t step = (uint32_t)((double)g_freq / SAMPLE_RATE * 4294967296.0 + 0.5);
+    const float toRad = 2.0f * PI / 4294967296.0f;
     for (int i = 0; i < N; i++) {
-      cur += (target - cur) * 0.003f;              // smooth fade, no clicks
-      int16_t v = (int16_t)(sinf(phase * 2.0f * PI) * cur * 32000.0f);
+      cur += (target - cur) * 0.0015f;             // smooth fade, no clicks
+      int16_t v = (int16_t)(sinf((float)phase * toRad) * cur * 32000.0f);
       buf[2 * i] = buf[2 * i + 1] = v;
-      phase += step;
-      if (phase >= 1.0f) phase -= 1.0f;
+      phase += step;                               // wraps exactly at 2^32 = one cycle
     }
     size_t written;
     i2s_write(I2S_NUM_0, buf, sizeof(buf), &written, portMAX_DELAY);
@@ -150,7 +153,7 @@ void initAudio() {
   cfg.bits_per_sample = I2S_BITS_PER_SAMPLE_16BIT;
   cfg.channel_format = I2S_CHANNEL_FMT_RIGHT_LEFT;
   cfg.communication_format = I2S_COMM_FORMAT_STAND_I2S;
-  cfg.dma_buf_count = 6;
+  cfg.dma_buf_count = 8;
   cfg.dma_buf_len = 256;
   cfg.tx_desc_auto_clear = true;
   i2s_driver_install(I2S_NUM_0, &cfg, 0, nullptr);

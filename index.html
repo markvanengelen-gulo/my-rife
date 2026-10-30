@@ -155,7 +155,11 @@ function renderList() {
 // --- Audio ---
 let ctx, osc, gain, timer, tick, queue = [], qi = 0;
 function ensureCtx() {
-  if (!ctx) ctx = new (window.AudioContext || window.webkitAudioContext)();
+  if (!ctx) {
+    const AC = window.AudioContext || window.webkitAudioContext;
+    // Ask for 96 kHz; the browser's oscillator already keeps exact phase.
+    try { ctx = new AC({ sampleRate: 96000 }); } catch (e) { ctx = new AC(); }
+  }
   if (ctx.state === "suspended") ctx.resume();
 }
 function setVolume() { if (gain) gain.gain.setTargetAtTime(($("vol").value / 100) ** 2 * 0.5, ctx.currentTime, 0.05); }
