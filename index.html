@@ -4,6 +4,13 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Frequency Player</title>
+<link rel="manifest" href="manifest.json">
+<link rel="icon" href="icon.svg">
+<link rel="apple-touch-icon" href="icon-192.png">
+<meta name="theme-color" content="#0f1419">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Frequencies">
+<meta name="apple-mobile-web-app-status-bar-style" content="black">
 <style>
   :root { --bg:#0f1419; --card:#1a2129; --line:#2b3540; --text:#e6edf3; --muted:#8b98a5; --accent:#4fb3a9; --stop:#d9644a; }
   * { box-sizing: border-box; }
@@ -212,6 +219,7 @@ $("addCustom").onclick = () => {
 };
 
 renderPresets();
+if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(() => {});
 </script>
 </body>
 </html>
