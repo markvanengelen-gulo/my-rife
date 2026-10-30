@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Frequency Player</title>
+<style>
+  :root { --bg:#0f1419; --card:#1a2129; --line:#2b3540; --text:#e6edf3; --muted:#8b98a5; --accent:#4fb3a9; --stop:#d9644a; }
+  * { box-sizing: border-box; }
+  body { margin:0; font-family: system-ui, -apple-system, sans-serif; background:var(--bg); color:var(--text); }
+  main { max-width: 560px; margin: 0 auto; padding: 20px 16px 48px; }
+  h1 { font-size: 1.4rem; margin: 0 0 4px; }
+  .sub { color: var(--muted); font-size: .9rem; margin: 0 0 18px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 16px; margin-bottom: 14px; }
+  label { display:block; font-size:.8rem; color:var(--muted); margin: 10px 0 4px; text-transform: uppercase; letter-spacing: .04em; }
+  select, input { width:100%; padding:10px; font-size:1rem; background:var(--bg); color:var(--text); border:1px solid var(--line); border-radius:8px; }
+  .row { display:flex; gap:10px; } .row > * { flex:1; }
+  button { padding: 12px; font-size: 1rem; font-weight: 600; border: 0; border-radius: 8px; cursor: pointer; background: var(--line); color: var(--text); }
+  button.primary { background: var(--accent); color: #062521; }
+  button.stop { background: var(--stop); color: #fff; }
+  .now { text-align:center; padding: 8px 0; }
+  .now .hz { font-size: 2.6rem; font-weight: 700; font-variant-numeric: tabular-nums; }
+  .now .name { color: var(--muted); min-height: 1.2em; }
+  .bar { height: 6px; background: var(--bg); border-radius: 3px; overflow: hidden; margin-top: 10px; }
+  .bar > div { height: 100%; width: 0; background: var(--accent); }
+  ul { list-style:none; padding:0; margin: 8px 0 0; max-height: 260px; overflow-y:auto; }
+  li { display:flex; justify-content:space-between; align-items:center; padding:8px 4px; border-bottom:1px solid var(--line); font-size:.95rem; }
+  li.active { color: var(--accent); font-weight: 600; }
+  li button { padding: 4px 10px; font-size: .8rem; }
+  .warn { font-size: .8rem; color: var(--muted); line-height: 1.45; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Frequency Player</h1>
+  <p class="sub">Play single tones or step through a frequency list.</p>
+
+  <div class="card">
+    <div class="now">
+      <div class="hz" id="nowHz">— Hz</div>
+      <div class="name" id="nowName">Stopped</div>
+      <div class="bar"><div id="progress"></div></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <label for="preset">Frequency list</label>
+    <select id="preset"></select>
+
+    <label for="freq">Frequency in list</label>
+    <select id="freq"></select>
+
+    <div class="row">
+      <div><label for="wave">Waveform</label>
+        <select id="wave"><option value="sine">Sine</option><option value="square">Square</option><option value="triangle">Triangle</option><option value="sawtooth">Sawtooth</option></select></div>
+      <div><label for="dur">Seconds each</label><input id="dur" type="number" min="5" max="3600" value="180"></div>
+    </div>
+
+    <label for="vol">Volume</label>
+    <input id="vol" type="range" min="0" max="100" value="30">
+
+    <div class="row" style="margin-top:14px">
+      <button class="primary" id="playOne">Play selected</button>
+      <button class="primary" id="playAll">Play whole list</button>
+    </div>
+    <div class="row" style="margin-top:10px">
+      <button class="stop" id="stop">Stop</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <label>Custom frequencies (saved on this device)</label>
+    <div class="row">
+      <input id="customHz" type="number" min="1" max="22000" step="0.01" placeholder="Hz">
+      <input id="customName" type="text" placeholder="Label (optional)">
+    </div>
+    <div class="row" style="margin-top:10px"><button id="addCustom">Add to "My list"</button></div>
+    <ul id="list"></ul>
+  </div>
+
+  <p class="warn">Most phone speakers and earbuds reproduce roughly 50 Hz – 18 kHz; tones outside that range may be silent. Keep volume moderate — long exposure to pure tones can strain hearing. Rife frequency lists are traditional and have no scientific evidence of any health effect; this is an audio tool, not a medical device.</p>
+</main>
+
+<script>
+// Frequencies commonly found on published Rife lists, plus other well-known tone sets.
+// Labels are descriptive only; no health claims are made.
+const PRESETS = {
+  "Rife – commonly cited set": [
+    [20, "20 Hz"], [72, "72 Hz"], [95, "95 Hz"], [125, "125 Hz"], [146, "146 Hz"],
+    [304, "304 Hz"], [440, "440 Hz"], [465, "465 Hz"], [660, "660 Hz"], [690, "690 Hz"],
+    [727, "727 Hz"], [728, "728 Hz"], [787, "787 Hz"], [800, "800 Hz"], [802, "802 Hz"],
+    [832, "832 Hz"], [880, "880 Hz"], [1550, "1550 Hz"], [1800, "1800 Hz"], [2008, "2008 Hz"],
+    [2127, "2127 Hz"], [2489, "2489 Hz"], [2720, "2720 Hz"], [5000, "5000 Hz"], [10000, "10000 Hz"]
+  ],
+  "Rife – 'general' sequence (727 / 787 / 880 / 5000 / 10000)": [
+    [727, "727 Hz"], [787, "787 Hz"], [880, "880 Hz"], [5000, "5000 Hz"], [10000, "10000 Hz"]
+  ],
+  "Solfeggio tones": [
+    [174, "174 Hz"], [285, "285 Hz"], [396, "396 Hz"], [417, "417 Hz"], [528, "528 Hz"],
+    [639, "639 Hz"], [741, "741 Hz"], [852, "852 Hz"], [963, "963 Hz"]
+  ],
+  "Schumann resonance & harmonics": [
+    [7.83, "7.83 Hz (below speaker range)"], [14.3, "14.3 Hz"], [20.8, "20.8 Hz"], [27.3, "27.3 Hz"], [33.8, "33.8 Hz"]
+  ],
+  "Test tones": [
+    [60, "60 Hz"], [100, "100 Hz"], [250, "250 Hz"], [440, "440 Hz (A4)"], [1000, "1 kHz"],
+    [4000, "4 kHz"], [8000, "8 kHz"], [12000, "12 kHz"], [16000, "16 kHz"]
+  ]
+};
+
+const $ = id => document.getElementById(id);
+let custom = [];
+try { custom = JSON.parse(localStorage.getItem("customFreqs") || "[]"); } catch (e) {}
+function saveCustom() { try { localStorage.setItem("customFreqs", JSON.stringify(custom)); } catch (e) {} }
+
+function lists() { return { ...PRESETS, "My list": custom }; }
+function currentList() { return lists()[$("preset").value] || []; }
+
+function renderPresets() {
+  const sel = $("preset"), keep = sel.value;
+  sel.innerHTML = Object.keys(lists()).map(k => `<option>${k}</option>`).join("");
+  if (keep) sel.value = keep;
+  renderList();
+}
+function renderList() {
+  const items = currentList(), isCustom = $("preset").value === "My list";
+  $("freq").innerHTML = items.length
+    ? items.map(([hz, name], i) => `<option value="${i}">${name || hz + " Hz"}</option>`).join("")
+    : `<option disabled>(empty — add frequencies below)</option>`;
+  $("list").innerHTML = items.map(([hz, name], i) =>
+    `<li data-i="${i}"><span>${name || hz + " Hz"}</span>` +
+    (isCustom ? `<button data-del="${i}">Remove</button>` : `<button data-play="${i}">Play</button>`) + `</li>`
+  ).join("");
+}
+
+// --- Audio ---
+let ctx, osc, gain, timer, tick, queue = [], qi = 0;
+function ensureCtx() {
+  if (!ctx) ctx = new (window.AudioContext || window.webkitAudioContext)();
+  if (ctx.state === "suspended") ctx.resume();
+}
+function setVolume() { if (gain) gain.gain.setTargetAtTime(($("vol").value / 100) ** 2 * 0.5, ctx.currentTime, 0.05); }
+
+function startTone(hz) {
+  ensureCtx();
+  if (!osc) {
+    gain = ctx.createGain(); gain.gain.value = 0; gain.connect(ctx.destination);
+    osc = ctx.createOscillator(); osc.connect(gain); osc.start();
+  }
+  osc.type = $("wave").value;
+  osc.frequency.setValueAtTime(hz, ctx.currentTime);
+  setVolume();
+}
+function stopAll() {
+  clearTimeout(timer); clearInterval(tick);
+  if (osc) {
+    gain.gain.setTargetAtTime(0, ctx.currentTime, 0.05);
+    const o = osc; setTimeout(() => { try { o.stop(); } catch (e) {} }, 300);
+    osc = null;
+  }
+  queue = []; $("nowHz").textContent = "— Hz"; $("nowName").textContent = "Stopped";
+  $("progress").style.width = "0"; highlight(-1);
+}
+function highlight(i) {
+  document.querySelectorAll("#list li").forEach(li => li.classList.toggle("active", +li.dataset.i === i));
+}
+function playIndex(n) {
+  if (n >= queue.length) { stopAll(); $("nowName").textContent = "Finished"; return; }
+  qi = n;
+  const [hz, name] = queue[n], secs = Math.max(1, +$("dur").value || 180);
+  startTone(hz);
+  $("nowHz").textContent = `${hz} Hz`;
+  $("nowName").textContent = `${name || ""}  (${n + 1} of ${queue.length})`;
+  highlight(queue.offsets ? queue.offsets[n] : n);
+  const t0 = Date.now();
+  clearInterval(tick);
+  tick = setInterval(() => { $("progress").style.width = Math.min(100, (Date.now() - t0) / (secs * 10)) + "%"; }, 250);
+  clearTimeout(timer);
+  timer = setTimeout(() => playIndex(n + 1), secs * 1000);
+}
+function playItems(items, offsets) { stopAll(); if (!items.length) return; queue = items.slice(); queue.offsets = offsets; playIndex(0); }
+
+// --- Events ---
+$("preset").onchange = renderList;
+$("playOne").onclick = () => { const i = +$("freq").value; const it = currentList()[i]; if (it) playItems([it], [i]); };
+$("playAll").onclick = () => playItems(currentList());
+$("stop").onclick = stopAll;
+$("vol").oninput = setVolume;
+$("wave").onchange = () => { if (osc) osc.type = $("wave").value; };
+$("list").onclick = e => {
+  const p = e.target.dataset.play, d = e.target.dataset.del;
+  if (p !== undefined) { $("freq").value = p; playItems([currentList()[+p]], [+p]); }
+  if (d !== undefined) { custom.splice(+d, 1); saveCustom(); renderList(); }
+};
+$("addCustom").onclick = () => {
+  const hz = parseFloat($("customHz").value);
+  if (!(hz > 0 && hz <= 22000)) { $("customHz").focus(); return; }
+  custom.push([hz, $("customName").value.trim() || `${hz} Hz`]); saveCustom();
+  $("customHz").value = ""; $("customName").value = "";
+  $("preset").value = "My list"; renderList();
+};
+
+renderPresets();
+</script>
+</body>
+</html>
