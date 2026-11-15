@@ -190,6 +190,11 @@ void setBacklight(bool on) {
 }
 
 // ---------- Touch (FT6336U on its own I2C bus) ----------
+bool touchPresent() {
+  Wire1.beginTransmission(TOUCH_ADDR);
+  return Wire1.endTransmission() == 0;
+}
+
 bool readTouch(int16_t &x, int16_t &y) {
   Wire1.beginTransmission(TOUCH_ADDR);
   Wire1.write(0x02);
@@ -433,7 +438,11 @@ void initPower() {
   pmu.setSysPowerDownVoltage(2600);
 
   pmu.setALDO2Voltage(3300); pmu.enableALDO2();   // display backlight
-  pmu.setALDO3Voltage(3300); pmu.enableALDO3();   // display + touch
+  // Display + touch. The touch chip has no reset pin, so if earlier firmware
+  // put it to sleep it stays asleep. Cutting its power for a moment resets it.
+  pmu.disableALDO3();
+  delay(300);
+  pmu.setALDO3Voltage(3300); pmu.enableALDO3();
   pmu.setBLDO2Voltage(3300); pmu.enableBLDO2();   // DRV2605 enable
   pmu.disableALDO4();                              // LoRa radio: OFF
 
@@ -463,6 +472,12 @@ void setup() {
   delay(50);
 
   Wire1.begin(PIN_TOUCH_SDA, PIN_TOUCH_SCL);
+  delay(300);                       // touch chip needs time after power-up
+  bool touchOk = touchPresent();
+  if (!touchOk) {                   // one more power cycle, then re-check
+    pmu.disableALDO3(); delay(500); pmu.enableALDO3(); delay(500);
+    touchOk = touchPresent();
+  }
 
   ledcSetup(0, 5000, 8);
   ledcAttachPin(PIN_DISP_BL, 0);
@@ -484,6 +499,17 @@ void setup() {
   durIdx = prefs.getUChar("dur", 2) % (sizeof(DURATIONS) / sizeof(DURATIONS[0]));
 
   initAudio();
+  if (!touchOk) {
+    lcd.fillScreen(C_BG);
+    lcd.setTextColor(C_STOP, C_BG);
+    lcd.setTextDatum(middle_center);
+    lcd.setFont(&fonts::Font2);
+    lcd.drawString("Touch screen not detected", 120, 100);
+    lcd.setTextColor(C_MUTED, C_BG);
+    lcd.drawString("Hold side button 6 s, then", 120, 130);
+    lcd.drawString("unplug USB and power on again", 120, 150);
+    delay(5000);
+  }
   drawList();
   lastActivity = millis();
 }
