@@ -13,15 +13,18 @@ Open `https://markvanengelen-gulo.github.io/my-rife/flash.html` in **Chrome or E
 - Volume and tone length are remembered between restarts.
 
 ## Controls
+Every button lights up and gives a short buzz when a tap registers. Buttons that can't do anything right now (e.g. UP at the top of a list) are greyed out.
+
 | Screen | Control | Action |
 |---|---|---|
 | List | `<` `>` | Change list |
-| List | Tap a frequency | Play it |
-| List | `UP` / `DN` | Scroll |
+| List | Tap a frequency row | Play it |
+| List | `UP` / `DN` | Previous / next page of the list |
 | List | `3m` (etc.) | Cycle tone length: 1, 2, 3, 5, 10 min |
 | List | `ALL` | Play the whole list in order |
-| Player | `STOP` / `-` / `+` / `NEXT` | Stop, volume, skip |
+| Player | `STOP` / `VOL -` / `VOL +` / `NEXT` | Stop, volume, skip (NEXT only when playing a list) |
 | Any | Side button short press | Screen on/off (playback continues) |
+| List | Side button hold ~2 s | Touch test screen (shows where taps land); short press to exit |
 | Any | Side button hold 6 s / 2 s | Power off / on |
 
 The screen turns off after 20 s; tap to wake.

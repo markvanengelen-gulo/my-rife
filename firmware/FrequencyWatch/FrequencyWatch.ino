@@ -13,6 +13,7 @@
     TIME cycles the length of each tone, ALL plays the whole list.
   - Player screen: STOP, - / + volume, NEXT (when playing a list).
   - Screen turns off after 20 s; tap or short-press the side button to wake.
+  - Hold the side button ~2 s (on the list screen) for a touch test screen.
   - Hold the side button ~6 s to power off; press ~2 s to power on.
 
   This is an audio/vibration tool. It is not a medical device and has no
@@ -203,6 +204,8 @@ bool readTouch(int16_t &x, int16_t &y) {
   uint8_t n = Wire1.read() & 0x0F;
   uint8_t xh = Wire1.read(), xl = Wire1.read(), yh = Wire1.read(), yl = Wire1.read();
   if (n == 0 || n > 2) return false;
+  uint8_t ev = xh >> 6;              // 0 = press down, 1 = lift up, 2 = contact, 3 = none
+  if (ev == 1 || ev == 3) return false;
   x = ((xh & 0x0F) << 8) | xl;
   y = ((yh & 0x0F) << 8) | yl;
 #if TOUCH_SWAP_XY
@@ -218,71 +221,135 @@ bool readTouch(int16_t &x, int16_t &y) {
 }
 
 // ---------- App state ----------
-enum Screen { LIST, PLAYER };
+enum Screen { LIST, PLAYER, TOUCHTEST };
 static Screen screen = LIST;
 static uint8_t listIdx = 0, scroll = 0;
 static int curItem = -1;
 static bool playAll = false;
 static uint32_t startMs = 0, durMs = 0;
 static int lastSecShown = -1;
+static uint32_t tickUntil = 0;
 
 const FreqList &L() { return LISTS[listIdx]; }
+const uint8_t ROWS = 4;
 
 String hzText(float hz) {
   if (hz == (int)hz) return String((int)hz);
   return String(hz, 2);
 }
 
-// ---------- Drawing ----------
-void button(int x, int y, int w, int h, const char *t, uint16_t bg, uint16_t fg = C_TEXT) {
-  lcd.fillRoundRect(x + 2, y + 2, w - 4, h - 4, 8, bg);
+// ---------- Buttons ----------
+// Every tappable thing on screen is a Btn. The same table is used to draw it
+// and to decide what a tap hit, so what you see is exactly what you can press.
+enum BtnId : uint8_t {
+  B_NONE, B_PREV, B_NEXTLIST, B_TITLE, B_ROW0, B_ROW1, B_ROW2, B_ROW3,
+  B_UP, B_DOWN, B_TIME, B_ALL, B_STOP, B_VOLDN, B_VOLUP, B_SKIP, B_EXIT
+};
+struct Btn { int16_t x, y, w, h; BtnId id; bool enabled; };
+static Btn btns[12];
+static uint8_t btnCount = 0;
+
+void addBtn(int x, int y, int w, int h, BtnId id, bool en = true) {
+  if (btnCount < 12) btns[btnCount++] = {(int16_t)x, (int16_t)y, (int16_t)w, (int16_t)h, id, en};
+}
+
+// Hit test with a few pixels of slack, and nearest-button fallback so taps
+// on gaps or at the very edge of the glass still land on something sensible.
+const Btn *hitTest(int16_t x, int16_t y) {
+  const Btn *best = nullptr;
+  int bestD = 1 << 30;
+  for (uint8_t i = 0; i < btnCount; i++) {
+    const Btn &b = btns[i];
+    int dx = x < b.x ? b.x - x : (x >= b.x + b.w ? x - (b.x + b.w - 1) : 0);
+    int dy = y < b.y ? b.y - y : (y >= b.y + b.h ? y - (b.y + b.h - 1) : 0);
+    int d = dx * dx + dy * dy;
+    if (d < bestD) { bestD = d; best = &b; }
+  }
+  return (best && bestD <= 12 * 12) ? best : nullptr;
+}
+
+void drawBtn(int x, int y, int w, int h, const char *t, uint16_t bg, uint16_t fg, bool en = true) {
+  if (!en) { bg = C_BG; fg = C_LINE; }
+  lcd.fillRoundRect(x + 2, y + 2, w - 4, h - 4, 10, bg);
+  if (!en) lcd.drawRoundRect(x + 2, y + 2, w - 4, h - 4, 10, C_LINE);
   lcd.setTextColor(fg, bg);
   lcd.setTextDatum(middle_center);
   lcd.setFont(&fonts::Font2);
   lcd.drawString(t, x + w / 2, y + h / 2);
 }
 
+// Brief highlight + haptic tick so every press is confirmed.
+void pressFeedback(const Btn &b) {
+  lcd.drawRoundRect(b.x + 2, b.y + 2, b.w - 4, b.h - 4, 10, C_TEXT);
+  lcd.drawRoundRect(b.x + 3, b.y + 3, b.w - 6, b.h - 6, 9, C_TEXT);
+  if (!vibeActive) { drv.setRealtimeValue(0x50); tickUntil = millis() + 25; }
+  delay(60);
+}
+
+// ---------- Screens ----------
 void drawList() {
+  btnCount = 0;
   lcd.fillScreen(C_BG);
-  // header
-  button(0, 0, 40, 36, "<", C_CARD);
-  button(200, 0, 40, 36, ">", C_CARD);
+
+  // Header: big arrow targets, list name in the middle
+  drawBtn(0, 0, 52, 40, "<", C_CARD, C_TEXT);
+  drawBtn(188, 0, 52, 40, ">", C_CARD, C_TEXT);
+  addBtn(0, 0, 52, 40, B_PREV);
+  addBtn(188, 0, 52, 40, B_NEXTLIST);
   lcd.setTextColor(C_TEXT, C_BG);
   lcd.setTextDatum(middle_center);
   lcd.setFont(&fonts::Font2);
   String name = L().name;
-  if (name.length() > 19) name = name.substring(0, 18) + ".";
-  lcd.drawString(name, 120, 18);
+  if (name.startsWith("Rife - ")) name = name.substring(7);
+  if (name.length() > 16) name = name.substring(0, 15) + ".";
+  lcd.drawString(name, 120, 13);
+  lcd.setFont(&fonts::Font0);
+  lcd.setTextColor(C_MUTED, C_BG);
+  char sub[24];
+  snprintf(sub, sizeof(sub), "list %d/%d", listIdx + 1, LIST_COUNT);
+  lcd.drawString(sub, 120, 31);
 
-  // rows
-  for (int r = 0; r < 4; r++) {
-    int i = scroll + r, y = 38 + r * 40;
+  // Rows: full-width tap targets
+  for (int r = 0; r < ROWS; r++) {
+    int i = scroll + r, y = 42 + r * 37;
     if (i >= L().count) break;
-    lcd.fillRoundRect(2, y, 236, 38, 6, C_CARD);
+    lcd.fillRoundRect(2, y + 1, 236, 35, 8, C_CARD);
     const Freq &f = L().items[i];
     lcd.setTextDatum(top_left);
     lcd.setFont(&fonts::Font2);
     lcd.setTextColor(C_ACCENT, C_CARD);
     String hz = hzText(f.hz) + " Hz";
-    if (f.hz < VIBE_BELOW_HZ) hz += "  (vibrate)";
-    lcd.drawString(hz, 10, y + 3);
+    if (f.hz < VIBE_BELOW_HZ) hz += "  vibrate";
+    lcd.drawString(hz, 12, y + 3);
     lcd.setFont(&fonts::Font0);
     lcd.setTextColor(C_MUTED, C_CARD);
     String lb = f.label;
-    if (lb.length() > 37) lb = lb.substring(0, 36) + ".";
-    lcd.drawString(lb, 10, y + 24);
+    if (lb.length() > 36) lb = lb.substring(0, 35) + ".";
+    lcd.drawString(lb, 12, y + 22);
+    lcd.setTextDatum(middle_right);
+    lcd.setFont(&fonts::Font2);
+    lcd.setTextColor(C_TEXT, C_CARD);
+    lcd.drawString(">", 230, y + 18);
+    addBtn(0, y, 240, 37, (BtnId)(B_ROW0 + r));
   }
 
-  // footer
+  // Footer: four equal buttons, 50 px tall, reaching the bottom edge
+  bool canUp = scroll > 0, canDn = scroll + ROWS < L().count;
   char t[8];
-  snprintf(t, sizeof(t), "%dm", DURATIONS[durIdx] >= 60 ? DURATIONS[durIdx] / 60 : 1);
-  button(0, 200, 60, 40, "UP", C_CARD);
-  button(60, 200, 60, 40, "DN", C_CARD);
-  button(120, 200, 60, 40, t, C_CARD);
-  button(180, 200, 60, 40, "ALL", C_ACCENT, 0x0000);
+  uint16_t d = DURATIONS[durIdx];
+  snprintf(t, sizeof(t), "%dm", d / 60);
+  drawBtn(0, 190, 60, 50, "UP", C_CARD, C_TEXT, canUp);
+  drawBtn(60, 190, 60, 50, "DN", C_CARD, C_TEXT, canDn);
+  drawBtn(120, 190, 60, 50, t, C_CARD, C_TEXT);
+  drawBtn(180, 190, 60, 50, "ALL", C_ACCENT, 0x0000);
+  addBtn(0, 190, 60, 50, B_UP, canUp);
+  addBtn(60, 190, 60, 50, B_DOWN, canDn);
+  addBtn(120, 190, 60, 50, B_TIME);
+  addBtn(180, 190, 60, 50, B_ALL);
 }
 
 void drawPlayerStatic() {
+  btnCount = 0;
   const Freq &f = L().items[curItem];
   lcd.fillScreen(C_BG);
   lcd.setTextColor(C_MUTED, C_BG);
@@ -290,12 +357,12 @@ void drawPlayerStatic() {
   lcd.setTextDatum(top_left);
   char top[32];
   if (playAll) snprintf(top, sizeof(top), "%d of %d", curItem + 1, L().count);
-  else snprintf(top, sizeof(top), "Single");
-  lcd.drawString(top, 6, 4);
+  else snprintf(top, sizeof(top), "Single tone");
+  lcd.drawString(top, 8, 4);
   lcd.setTextDatum(top_right);
-  char vb[24];
-  snprintf(vb, sizeof(vb), "Vol %d  %d%%", volume, pmu.getBatteryPercent());
-  lcd.drawString(vb, 234, 4);
+  char bat[12];
+  snprintf(bat, sizeof(bat), "%d%%%s", pmu.getBatteryPercent(), pmu.isCharging() ? "+" : "");
+  lcd.drawString(bat, 232, 4);
 
   // big number
   lcd.setTextDatum(middle_center);
@@ -303,17 +370,16 @@ void drawPlayerStatic() {
   lcd.setFont(&fonts::Font7);
   String hz = hzText(f.hz);
   lcd.setTextSize(hz.length() > 4 ? 0.8f : 1.0f);
-  lcd.drawString(hz, 120, 62);
+  lcd.drawString(hz, 120, 56);
   lcd.setTextSize(1);
   lcd.setFont(&fonts::Font2);
   lcd.setTextColor(C_MUTED, C_BG);
   const char *how = f.hz < VIBE_BELOW_HZ ? "Hz - vibration" : (f.hz > 18000 ? "Hz - above most speakers" : "Hz - speaker");
-  lcd.drawString(how, 120, 100);
+  lcd.drawString(how, 120, 90);
 
   // label (up to two lines)
   lcd.setTextColor(C_TEXT, C_BG);
-  String lb = f.label;
-  String l1 = lb, l2 = "";
+  String lb = f.label, l1 = lb, l2 = "";
   if (lb.length() > 26) {
     int cut = lb.lastIndexOf(',', 26);
     if (cut < 0) cut = 26;
@@ -322,14 +388,29 @@ void drawPlayerStatic() {
     l2.trim();
     if (l2.length() > 28) l2 = l2.substring(0, 27) + ".";
   }
-  lcd.drawString(l1, 120, 124);
-  if (l2.length()) lcd.drawString(l2, 120, 142);
+  lcd.drawString(l1, 120, 110);
+  if (l2.length()) lcd.drawString(l2, 120, 127);
 
-  // buttons
-  button(0, 196, 60, 44, "STOP", C_STOP);
-  button(60, 196, 60, 44, "-", C_CARD);
-  button(120, 196, 60, 44, "+", C_CARD);
-  if (playAll) button(180, 196, 60, 44, "NEXT", C_CARD);
+  // volume bar
+  lcd.setFont(&fonts::Font0);
+  lcd.setTextDatum(middle_left);
+  lcd.setTextColor(C_MUTED, C_BG);
+  lcd.drawString("VOL", 10, 178);
+  for (int i = 0; i < 10; i++)
+    lcd.fillRoundRect(34 + i * 20, 174, 16, 8, 3, i < volume ? C_ACCENT : C_LINE);
+
+  // buttons: 3 across for a single tone, 4 across when playing a list
+  int n = playAll ? 4 : 3, w = 240 / n;
+  drawBtn(0, 190, w, 50, "STOP", C_STOP, C_TEXT);
+  drawBtn(w, 190, w, 50, "VOL -", C_CARD, C_TEXT, volume > 1);
+  drawBtn(2 * w, 190, w, 50, "VOL +", C_CARD, C_TEXT, volume < 10);
+  addBtn(0, 190, w, 50, B_STOP);
+  addBtn(w, 190, w, 50, B_VOLDN, volume > 1);
+  addBtn(2 * w, 190, w, 50, B_VOLUP, volume < 10);
+  if (playAll) {
+    drawBtn(3 * w, 190, w, 50, "NEXT", C_CARD, C_TEXT);
+    addBtn(3 * w, 190, w, 50, B_SKIP);
+  }
   lastSecShown = -1;
 }
 
@@ -340,15 +421,41 @@ void drawPlayerProgress() {
   lastSecShown = left;
   int w = durMs ? (int)(220.0f * el / durMs) : 0;
   if (w > 220) w = 220;
-  lcd.fillRoundRect(10, 162, 220, 8, 4, C_LINE);
-  lcd.fillRoundRect(10, 162, w, 8, 4, C_ACCENT);
+  lcd.fillRoundRect(10, 144, 220, 8, 4, C_LINE);
+  if (w > 0) lcd.fillRoundRect(10, 144, w, 8, 4, C_ACCENT);
   char t[12];
-  snprintf(t, sizeof(t), "%d:%02d", left / 60, left % 60);
+  snprintf(t, sizeof(t), "%d:%02d left", left / 60, left % 60);
   lcd.setFont(&fonts::Font2);
   lcd.setTextDatum(top_center);
   lcd.setTextColor(C_MUTED, C_BG);
-  lcd.fillRect(80, 174, 80, 18, C_BG);
-  lcd.drawString(t, 120, 175);
+  lcd.fillRect(60, 154, 120, 16, C_BG);
+  lcd.drawString(t, 120, 154);
+}
+
+void drawTouchTest() {
+  btnCount = 0;
+  lcd.fillScreen(C_BG);
+  for (int g = 40; g < 240; g += 40) {
+    lcd.drawFastHLine(0, g, 240, C_LINE);
+    lcd.drawFastVLine(g, 0, 240, C_LINE);
+  }
+  lcd.setTextDatum(middle_center);
+  lcd.setFont(&fonts::Font2);
+  lcd.setTextColor(C_TEXT, C_BG);
+  lcd.drawString("Touch test", 120, 60);
+  lcd.setTextColor(C_MUTED, C_BG);
+  lcd.drawString("Tap anywhere, incl. edges", 120, 82);
+  lcd.drawString("Side button = exit", 120, 100);
+}
+
+void touchTestPoint(int16_t x, int16_t y) {
+  lcd.fillCircle(x, y, 6, C_ACCENT);
+  char t[24];
+  snprintf(t, sizeof(t), " x=%d  y=%d ", x, y);
+  lcd.setFont(&fonts::Font2);
+  lcd.setTextDatum(middle_center);
+  lcd.setTextColor(C_TEXT, C_STOP);
+  lcd.drawString(t, 120, 140);
 }
 
 // ---------- Playback ----------
@@ -393,37 +500,35 @@ void saveSettings() {
 
 // ---------- Input ----------
 void onTap(int16_t x, int16_t y) {
-  if (screen == LIST) {
-    if (y < 36) {
-      if (x < 60) listIdx = (listIdx + LIST_COUNT - 1) % LIST_COUNT;
-      else if (x > 180) listIdx = (listIdx + 1) % LIST_COUNT;
-      else return;
-      scroll = 0;
-      drawList();
-    } else if (y < 198) {
-      int i = scroll + (y - 38) / 40;
-      if (i < L().count) { playAll = false; startItem(i); }
-    } else {
-      if (x < 60) { if (scroll > 0) { scroll = scroll >= 4 ? scroll - 4 : 0; drawList(); } }
-      else if (x < 120) { if (scroll + 4 < L().count) { scroll += 4; drawList(); } }
-      else if (x < 180) { durIdx = (durIdx + 1) % (sizeof(DURATIONS) / sizeof(DURATIONS[0])); saveSettings(); drawList(); }
-      else { playAll = true; startItem(0); }
-    }
-  } else {
-    if (y < 196) return;
-    if (x < 60) stopPlayback();
-    else if (x < 180) {
-      if (x < 120 && volume > 1) volume--;
-      else if (x >= 120 && volume < 10) volume++;
+  if (screen == TOUCHTEST) { touchTestPoint(x, y); return; }
+
+  const Btn *b = hitTest(x, y);
+  if (!b || !b->enabled) return;
+  pressFeedback(*b);
+
+  switch (b->id) {
+    case B_PREV:     listIdx = (listIdx + LIST_COUNT - 1) % LIST_COUNT; scroll = 0; drawList(); break;
+    case B_NEXTLIST: listIdx = (listIdx + 1) % LIST_COUNT; scroll = 0; drawList(); break;
+    case B_ROW0: case B_ROW1: case B_ROW2: case B_ROW3:
+      playAll = false; startItem(scroll + (b->id - B_ROW0)); break;
+    case B_UP:   scroll = scroll >= ROWS ? scroll - ROWS : 0; drawList(); break;
+    case B_DOWN: if (scroll + ROWS < L().count) scroll += ROWS; drawList(); break;
+    case B_TIME: durIdx = (durIdx + 1) % (sizeof(DURATIONS) / sizeof(DURATIONS[0])); saveSettings(); drawList(); break;
+    case B_ALL:  playAll = true; startItem(0); break;
+    case B_STOP: stopPlayback(); break;
+    case B_VOLDN: case B_VOLUP:
+      if (b->id == B_VOLDN && volume > 1) volume--;
+      if (b->id == B_VOLUP && volume < 10) volume++;
       saveSettings();
       if (g_tone) g_amp = volumeToAmp();
       if (vibeActive && vibeOn) vibeWrite(true);
       drawPlayerStatic();
       drawPlayerProgress();
-    } else if (playAll) {
-      if (curItem + 1 < L().count) startItem(curItem + 1);
-      else stopPlayback();
-    }
+      break;
+    case B_SKIP:
+      if (curItem + 1 < L().count) startItem(curItem + 1); else stopPlayback();
+      break;
+    default: break;
   }
 }
 
@@ -460,7 +565,7 @@ void initPower() {
 
   pmu.disableIRQ(XPOWERS_AXP2101_ALL_IRQ);
   pmu.clearIrqStatus();
-  pmu.enableIRQ(XPOWERS_AXP2101_PKEY_SHORT_IRQ);
+  pmu.enableIRQ(XPOWERS_AXP2101_PKEY_SHORT_IRQ | XPOWERS_AXP2101_PKEY_LONG_IRQ);
 }
 
 void setup() {
@@ -523,24 +628,41 @@ void loop() {
   int16_t x, y;
   bool touched = readTouch(x, y);
   if (touched && !wasTouched) {
+    x = constrain(x, 0, 239);
+    y = constrain(y, 0, 239);
     lastActivity = now;
     if (!screenOn) setBacklight(true);   // first tap only wakes the screen
     else onTap(x, y);
   }
+  if (touched) lastActivity = now;
   wasTouched = touched;
 
-  // side button: short press toggles the screen
+  // end of the short haptic "click"
+  if (tickUntil && (int32_t)(now - tickUntil) >= 0) {
+    tickUntil = 0;
+    if (!vibeActive) drv.setRealtimeValue(0);
+  }
+
+  // side button: short press = screen on/off (or leave touch test),
+  // hold ~2 s = touch test screen, hold 6 s = power off
   if (now - lastPmuPoll > 100) {
     lastPmuPoll = now;
     pmu.getIrqStatus();
     if (pmu.isPekeyShortPressIrq()) {
-      setBacklight(!screenOn);
       lastActivity = now;
+      if (screen == TOUCHTEST) { screen = LIST; drawList(); setBacklight(true); }
+      else setBacklight(!screenOn);
+    }
+    if (pmu.isPekeyLongPressIrq() && screen != PLAYER) {
+      lastActivity = now;
+      setBacklight(true);
+      screen = TOUCHTEST;
+      drawTouchTest();
     }
     pmu.clearIrqStatus();
   }
 
-  if (screenOn && now - lastActivity > SCREEN_TIMEOUT) setBacklight(false);
+  if (screenOn && screen != TOUCHTEST && now - lastActivity > SCREEN_TIMEOUT) setBacklight(false);
 
   // vibration pulses for low frequencies
   if (vibeActive) {
@@ -561,5 +683,5 @@ void loop() {
     }
   }
 
-  delay(vibeActive ? 1 : 15);
+  delay(vibeActive ? 1 : 10);
 }
