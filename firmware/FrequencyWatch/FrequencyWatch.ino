@@ -109,6 +109,33 @@ Preferences prefs;
 #define C_ACCENT 0x4D95
 #define C_STOP   0xDB29
 
+// AXP2101 fuel-gauge model for the T-Watch S3's 470 mAh cell.
+// Copied from LilyGO's LilyGoLib (MIT License, (c) Xinyuan Electronics).
+static uint8_t BATTERY_PARAMS_470mAh[] = {
+    0x01, 0xF5, 0x40, 0x00, 0x1B, 0x1E, 0x28, 0x0F, 0x0C, 0x1E, 0x32, 0x2, 0x14, 0x05, 0x0A, 0x04,
+    0x74, 0xFF, 0xB0, 0x0D, 0x43, 0x10, 0x01, 0xFC, 0x90, 0x01, 0xEA, 0x06, 0xE0, 0x06, 0x01, 0x05,
+    0xF7, 0x0A, 0xED, 0x0F, 0xE5, 0x0F, 0x85, 0x0A, 0x33, 0x0F, 0xF6, 0x0E, 0xEF, 0x04, 0xE1, 0x04,
+    0xD3, 0x09, 0xC3, 0x0E, 0xAD, 0x0E, 0xA7, 0x09, 0x9C, 0x0E, 0x82, 0x0E, 0x7B, 0x04, 0x6C, 0x04,
+    0x69, 0x09, 0x5F, 0x0E, 0x06, 0x0D, 0x55, 0x06, 0x90, 0x5E, 0x2F, 0x2A, 0x20, 0x0F, 0x13, 0x09,
+    0xC5, 0x98, 0x7E, 0x66, 0x4E, 0x44, 0x38, 0x1A, 0x12, 0x0A, 0xF6, 0x00, 0x00, 0xF6, 0x00, 0xF6,
+    0x00, 0xFB, 0x00, 0x00, 0xFB, 0x00, 0x00, 0xFB, 0x00, 0x00, 0xF6, 0x00, 0x00, 0xF6, 0x00, 0xF6,
+    0x00, 0xFB, 0x00, 0x00, 0xFB, 0x00, 0x00, 0xFB, 0x00, 0x00, 0xF6, 0x00, 0x00, 0xF6, 0x00, 0xF6
+};
+
+// Battery status for the header: "78%", "78% +" while charging, or
+// "no batt 0.0V" when the PMU doesn't see a battery (with the raw voltage
+// reading so a flat-but-present cell can be told apart from a missing one).
+String batteryText() {
+  bool chg = pmu.isCharging();
+  if (!pmu.isBatteryConnect()) {
+    int hi = pmu.readRegister(0x34), lo = pmu.readRegister(0x35);
+    float v = ((((hi < 0 ? 0 : hi) & 0x3F) << 8) | (lo < 0 ? 0 : lo)) / 1000.0f;
+    return String("no batt ") + String(v, 1) + "V";
+  }
+  int p = constrain(pmu.getBatteryPercent(), 0, 100);
+  return String(p) + "%" + (chg ? " +" : "");
+}
+
 // ---------- Settings ----------
 static const uint16_t DURATIONS[] = {60, 120, 180, 300, 600};
 static uint8_t durIdx = 2;     // 180 s
@@ -313,8 +340,8 @@ void drawList() {
   lcd.setFont(&fonts::Font0);
   lcd.setTextColor(C_MUTED, C_BG);
   char sub[24];
-  snprintf(sub, sizeof(sub), "list %d/%d", listIdx + 1, LIST_COUNT);
-  lcd.drawString(sub, 120, 31);
+  snprintf(sub, sizeof(sub), "%d/%d", listIdx + 1, LIST_COUNT);
+  lcd.drawString(String(sub) + "  " + batteryText(), 120, 31);
 
   // Rows: full-width tap targets
   for (int r = 0; r < ROWS; r++) {
@@ -367,9 +394,7 @@ void drawPlayerStatic() {
   else snprintf(top, sizeof(top), "Single tone");
   lcd.drawString(top, 8, 4);
   lcd.setTextDatum(top_right);
-  char bat[12];
-  snprintf(bat, sizeof(bat), "%d%%%s", pmu.getBatteryPercent(), pmu.isCharging() ? "+" : "");
-  lcd.drawString(bat, 232, 4);
+  lcd.drawString(batteryText(), 232, 4);
 
   // big number
   lcd.setTextDatum(middle_center);
@@ -740,6 +765,8 @@ void initPower() {
   pmu.enableBattVoltageMeasure();
   pmu.setChargerConstantCurr(XPOWERS_AXP2101_CHG_CUR_100MA);
   pmu.setChargeTargetVoltage(XPOWERS_AXP2101_CHG_VOL_4V2);
+  pmu.enableCellbatteryCharge();                                   // charging on
+  pmu.writeRegister(0x18, pmu.readRegister(0x18) | 0x08);          // fuel gauge on
   pmu.setPowerKeyPressOffTime(XPOWERS_POWEROFF_6S);
 
   pmu.disableIRQ(XPOWERS_AXP2101_ALL_IRQ);
@@ -781,6 +808,10 @@ void setup() {
   prefs.begin("freqwatch", false);
   volume = constrain(prefs.getUChar("vol", 5), 1, 10);
   durIdx = prefs.getUChar("dur", 2) % (sizeof(DURATIONS) / sizeof(DURATIONS[0]));
+  if (!prefs.getBool("gauge", false) && pmu.isBatteryConnect() &&
+      pmu.writeGaugeData(BATTERY_PARAMS_470mAh, sizeof(BATTERY_PARAMS_470mAh))) {
+    prefs.putBool("gauge", true);
+  }
 
   initAudio();
   bool haveCal = prefs.getBytesLength("cal") == sizeof(cal) &&
