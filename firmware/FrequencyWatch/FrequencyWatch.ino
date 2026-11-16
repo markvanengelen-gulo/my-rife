@@ -278,12 +278,17 @@ void drawBtn(int x, int y, int w, int h, const char *t, uint16_t bg, uint16_t fg
   lcd.drawString(t, x + w / 2, y + h / 2);
 }
 
-// Brief highlight + haptic tick so every press is confirmed.
-void pressFeedback(const Btn &b) {
-  lcd.drawRoundRect(b.x + 2, b.y + 2, b.w - 4, b.h - 4, 10, C_TEXT);
-  lcd.drawRoundRect(b.x + 3, b.y + 3, b.w - 6, b.h - 6, 9, C_TEXT);
-  if (!vibeActive) { drv.setRealtimeValue(0x50); tickUntil = millis() + 25; }
-  delay(60);
+// Outline a button while the finger is on it.
+void highlight(const Btn &b, bool on) {
+  uint16_t c = on ? C_TEXT : C_BG;
+  lcd.drawRoundRect(b.x + 2, b.y + 2, b.w - 4, b.h - 4, 10, c);
+  lcd.drawRoundRect(b.x + 1, b.y + 1, b.w - 2, b.h - 2, 11, c);
+}
+
+// Short haptic click, given after the finger has lifted so the motor
+// can't disturb the touch reading.
+void clickFeedback() {
+  if (!vibeActive) { drv.setRealtimeValue(0x50); tickUntil = millis() + 20; }
 }
 
 // ---------- Screens ----------
@@ -499,26 +504,26 @@ void saveSettings() {
 }
 
 // ---------- Input ----------
-void onTap(int16_t x, int16_t y) {
-  if (screen == TOUCHTEST) { touchTestPoint(x, y); return; }
+const Btn *findBtn(BtnId id) {
+  for (uint8_t i = 0; i < btnCount; i++) if (btns[i].id == id) return &btns[i];
+  return nullptr;
+}
 
-  const Btn *b = hitTest(x, y);
-  if (!b || !b->enabled) return;
-  pressFeedback(*b);
-
-  switch (b->id) {
+void activate(BtnId id) {
+  clickFeedback();
+  switch (id) {
     case B_PREV:     listIdx = (listIdx + LIST_COUNT - 1) % LIST_COUNT; scroll = 0; drawList(); break;
     case B_NEXTLIST: listIdx = (listIdx + 1) % LIST_COUNT; scroll = 0; drawList(); break;
     case B_ROW0: case B_ROW1: case B_ROW2: case B_ROW3:
-      playAll = false; startItem(scroll + (b->id - B_ROW0)); break;
+      playAll = false; startItem(scroll + (id - B_ROW0)); break;
     case B_UP:   scroll = scroll >= ROWS ? scroll - ROWS : 0; drawList(); break;
     case B_DOWN: if (scroll + ROWS < L().count) scroll += ROWS; drawList(); break;
     case B_TIME: durIdx = (durIdx + 1) % (sizeof(DURATIONS) / sizeof(DURATIONS[0])); saveSettings(); drawList(); break;
     case B_ALL:  playAll = true; startItem(0); break;
     case B_STOP: stopPlayback(); break;
     case B_VOLDN: case B_VOLUP:
-      if (b->id == B_VOLDN && volume > 1) volume--;
-      if (b->id == B_VOLUP && volume < 10) volume++;
+      if (id == B_VOLDN && volume > 1) volume--;
+      if (id == B_VOLUP && volume < 10) volume++;
       saveSettings();
       if (g_tone) g_amp = volumeToAmp();
       if (vibeActive && vibeOn) vibeWrite(true);
@@ -529,6 +534,54 @@ void onTap(int16_t x, int16_t y) {
       if (curItem + 1 < L().count) startItem(curItem + 1); else stopPlayback();
       break;
     default: break;
+  }
+}
+
+// ---------- Touch handling ----------
+// A tap counts once: the button is chosen when the finger goes down, it is
+// outlined while held, and it fires only when the finger lifts while still on
+// that button. Brief drop-outs in the touch signal (< 80 ms) are ignored, and
+// new taps are ignored for a moment after a screen change.
+static bool fingerDown = false, wakeTap = false;
+static BtnId pressedId = B_NONE;
+static int16_t lastX = 0, lastY = 0;
+static uint32_t lastRawTouch = 0, ignoreUntil = 0;
+
+void handleTouch(uint32_t now) {
+  int16_t x, y;
+  if (readTouch(x, y)) {
+    lastRawTouch = now;
+    lastX = constrain(x, 0, 239);
+    lastY = constrain(y, 0, 239);
+  }
+  bool down = lastRawTouch && (now - lastRawTouch < 80);
+
+  if (down && !fingerDown) {                 // finger went down
+    fingerDown = true;
+    lastActivity = now;
+    pressedId = B_NONE;
+    if (!screenOn) { setBacklight(true); wakeTap = true; return; }
+    if ((int32_t)(now - ignoreUntil) < 0) return;
+    if (screen == TOUCHTEST) { touchTestPoint(lastX, lastY); return; }
+    const Btn *b = hitTest(lastX, lastY);
+    if (b && b->enabled) { pressedId = b->id; highlight(*b, true); }
+  } else if (down) {                         // finger held
+    lastActivity = now;
+    if (screen == TOUCHTEST) touchTestPoint(lastX, lastY);
+  } else if (fingerDown) {                   // finger lifted
+    fingerDown = false;
+    if (wakeTap) { wakeTap = false; return; }
+    if (pressedId == B_NONE) return;
+    const Btn *b = findBtn(pressedId);
+    const Btn *at = hitTest(lastX, lastY);
+    BtnId id = pressedId;
+    pressedId = B_NONE;
+    if (b && at && at->id == id) {
+      activate(id);
+      ignoreUntil = millis() + 250;
+    } else if (b) {
+      highlight(*b, false);                  // slid off: cancel
+    }
   }
 }
 
@@ -620,22 +673,10 @@ void setup() {
 }
 
 void loop() {
-  static bool wasTouched = false;
   static uint32_t lastPmuPoll = 0;
   uint32_t now = millis();
 
-  // touch: act on the moment of pressing
-  int16_t x, y;
-  bool touched = readTouch(x, y);
-  if (touched && !wasTouched) {
-    x = constrain(x, 0, 239);
-    y = constrain(y, 0, 239);
-    lastActivity = now;
-    if (!screenOn) setBacklight(true);   // first tap only wakes the screen
-    else onTap(x, y);
-  }
-  if (touched) lastActivity = now;
-  wasTouched = touched;
+  handleTouch(now);
 
   // end of the short haptic "click"
   if (tickUntil && (int32_t)(now - tickUntil) >= 0) {

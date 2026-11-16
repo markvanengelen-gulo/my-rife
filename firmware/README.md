@@ -13,7 +13,7 @@ Open `https://markvanengelen-gulo.github.io/my-rife/flash.html` in **Chrome or E
 - Volume and tone length are remembered between restarts.
 
 ## Controls
-Every button lights up and gives a short buzz when a tap registers. Buttons that can't do anything right now (e.g. UP at the top of a list) are greyed out.
+Taps fire when you lift your finger: the button is outlined while pressed, and a short buzz confirms it. Slide off a button before lifting to cancel. Buttons that can't do anything right now (e.g. UP at the top of a list) are greyed out.
 
 | Screen | Control | Action |
 |---|---|---|
