@@ -13,7 +13,9 @@ Open `https://markvanengelen-gulo.github.io/my-rife/flash.html` in **Chrome or E
 - Volume and tone length are remembered between restarts.
 
 ## Controls
-Taps fire when you lift your finger: the button is outlined while pressed, and a short buzz confirms it. Slide off a button before lifting to cancel. Buttons that can't do anything right now (e.g. UP at the top of a list) are greyed out.
+Hold a button for **0.5 s** to press it: it's outlined when touched and a bar fills across it; when the bar is full it fires once, with a short buzz. Let go early or slide off to cancel. Nothing else can be pressed until you lift your finger.
+
+On first start the watch asks you to press and hold three **+** targets. This lines the touch layer up with the screen, then a check screen shows a dot under your finger; short-press the side button when it looks right.
 
 | Screen | Control | Action |
 |---|---|---|
@@ -24,7 +26,7 @@ Taps fire when you lift your finger: the button is outlined while pressed, and a
 | List | `ALL` | Play the whole list in order |
 | Player | `STOP` / `VOL -` / `VOL +` / `NEXT` | Stop, volume, skip (NEXT only when playing a list) |
 | Any | Side button short press | Screen on/off (playback continues) |
-| List | Side button hold ~2 s | Touch test screen (shows where taps land); short press to exit |
+| List | Side button hold ~2 s | Redo touch alignment |
 | Any | Side button hold 6 s / 2 s | Power off / on |
 
 The screen turns off after 20 s; tap to wake.

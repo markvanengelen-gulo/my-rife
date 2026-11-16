@@ -13,7 +13,9 @@
     TIME cycles the length of each tone, ALL plays the whole list.
   - Player screen: STOP, - / + volume, NEXT (when playing a list).
   - Screen turns off after 20 s; tap or short-press the side button to wake.
-  - Hold the side button ~2 s (on the list screen) for a touch test screen.
+  - Buttons fire after being held for 0.5 s (a bar fills to show progress).
+  - First start: touch alignment (hold three + targets). Hold the side button
+    ~2 s on the list screen to redo it.
   - Hold the side button ~6 s to power off; press ~2 s to power on.
 
   This is an audio/vibration tool. It is not a medical device and has no
@@ -447,10 +449,10 @@ void drawTouchTest() {
   lcd.setTextDatum(middle_center);
   lcd.setFont(&fonts::Font2);
   lcd.setTextColor(C_TEXT, C_BG);
-  lcd.drawString("Touch test", 120, 60);
+  lcd.drawString("Check alignment", 120, 60);
   lcd.setTextColor(C_MUTED, C_BG);
-  lcd.drawString("Tap anywhere, incl. edges", 120, 82);
-  lcd.drawString("Side button = exit", 120, 100);
+  lcd.drawString("The dot should be under", 120, 82);
+  lcd.drawString("your finger. Side button = done", 120, 100);
 }
 
 void touchTestPoint(int16_t x, int16_t y) {
@@ -537,51 +539,175 @@ void activate(BtnId id) {
   }
 }
 
+// ---------- Touch calibration ----------
+// Maps raw touch-chip coordinates to screen pixels with an affine transform
+// worked out from three targets the user touches. This corrects any flip,
+// swap, offset or scale between the touch layer and the display.
+static float cal[6] = {1, 0, 0, 0, 1, 0};   // x = c0*rx + c1*ry + c2, y = c3*rx + c4*ry + c5
+
+void mapTouch(int16_t rx, int16_t ry, int16_t &x, int16_t &y) {
+  float fx = cal[0] * rx + cal[1] * ry + cal[2];
+  float fy = cal[3] * rx + cal[4] * ry + cal[5];
+  x = constrain((int)lroundf(fx), 0, 239);
+  y = constrain((int)lroundf(fy), 0, 239);
+}
+
+// Wait for the finger to be off the glass, then for a steady 0.4 s touch.
+bool waitHold(int16_t &rx, int16_t &ry, uint32_t timeoutMs) {
+  uint32_t t0 = millis(), lastSeen = millis();
+  int16_t x, y;
+  while (millis() - t0 < timeoutMs) {                 // wait for release
+    if (readTouch(x, y)) lastSeen = millis();
+    else if (millis() - lastSeen > 250) break;
+    delay(10);
+  }
+  long sx = 0, sy = 0; int n = 0;
+  uint32_t holdStart = 0; lastSeen = 0;
+  while (millis() - t0 < timeoutMs) {
+    if (readTouch(x, y)) {
+      if (!holdStart) { holdStart = millis(); sx = sy = 0; n = 0; }
+      lastSeen = millis();
+      sx += x; sy += y; n++;
+      if (millis() - holdStart >= 400 && n >= 5) { rx = sx / n; ry = sy / n; return true; }
+    } else if (holdStart && millis() - lastSeen > 150) {
+      holdStart = 0;
+    }
+    delay(10);
+  }
+  return false;
+}
+
+void drawTarget(int tx, int ty, int step) {
+  lcd.fillScreen(C_BG);
+  lcd.setTextDatum(middle_center);
+  lcd.setFont(&fonts::Font2);
+  lcd.setTextColor(C_TEXT, C_BG);
+  lcd.drawString("Touch alignment", 120, 100);
+  lcd.setTextColor(C_MUTED, C_BG);
+  char t[32];
+  snprintf(t, sizeof(t), "Press and hold the +  (%d/3)", step);
+  lcd.drawString(t, 120, 122);
+  lcd.drawCircle(tx, ty, 14, C_ACCENT);
+  lcd.drawFastHLine(tx - 20, ty, 41, C_ACCENT);
+  lcd.drawFastVLine(tx, ty - 20, 41, C_ACCENT);
+}
+
+void buzz(uint16_t ms) {
+  drv.setRealtimeValue(0x60); delay(ms); drv.setRealtimeValue(0);
+}
+
+bool runCalibration() {
+  const int TX[3] = {40, 200, 40}, TY[3] = {40, 40, 200};
+  int16_t RX[3], RY[3];
+  for (int i = 0; i < 3; i++) {
+    drawTarget(TX[i], TY[i], i + 1);
+    if (!waitHold(RX[i], RY[i], 30000)) goto fail;
+    buzz(30);
+  }
+  {
+    // Solve [rx ry 1] * [c0 c1 c2]' = tx (and the same for y) with Cramer's rule.
+    double m[3][3], det;
+    for (int i = 0; i < 3; i++) { m[i][0] = RX[i]; m[i][1] = RY[i]; m[i][2] = 1; }
+    det = m[0][0] * (m[1][1] * m[2][2] - m[1][2] * m[2][1])
+        - m[0][1] * (m[1][0] * m[2][2] - m[1][2] * m[2][0])
+        + m[0][2] * (m[1][0] * m[2][1] - m[1][1] * m[2][0]);
+    if (fabs(det) < 100) goto fail;              // targets weren't distinct
+    float c[6];
+    for (int k = 0; k < 2; k++) {
+      const int *T = k == 0 ? TX : TY;
+      for (int col = 0; col < 3; col++) {
+        double mm[3][3];
+        for (int r = 0; r < 3; r++) for (int cc = 0; cc < 3; cc++) mm[r][cc] = (cc == col) ? T[r] : m[r][cc];
+        double d = mm[0][0] * (mm[1][1] * mm[2][2] - mm[1][2] * mm[2][1])
+                 - mm[0][1] * (mm[1][0] * mm[2][2] - mm[1][2] * mm[2][0])
+                 + mm[0][2] * (mm[1][0] * mm[2][1] - mm[1][1] * mm[2][0]);
+        c[k * 3 + col] = d / det;
+      }
+    }
+    float scale = fabsf(c[0] * c[4] - c[1] * c[3]);   // area scale of the mapping
+    if (scale < 0.3f || scale > 3.0f) goto fail;
+    memcpy(cal, c, sizeof(cal));
+    prefs.putBytes("cal", cal, sizeof(cal));
+    return true;
+  }
+fail:
+  lcd.fillScreen(C_BG);
+  lcd.setTextDatum(middle_center);
+  lcd.setFont(&fonts::Font2);
+  lcd.setTextColor(C_STOP, C_BG);
+  lcd.drawString("Alignment didn't work", 120, 100);
+  lcd.setTextColor(C_MUTED, C_BG);
+  lcd.drawString("Hold side button 2 s to retry", 120, 124);
+  delay(3000);
+  return false;
+}
+
 // ---------- Touch handling ----------
-// A tap counts once: the button is chosen when the finger goes down, it is
-// outlined while held, and it fires only when the finger lifts while still on
-// that button. Brief drop-outs in the touch signal (< 80 ms) are ignored, and
-// new taps are ignored for a moment after a screen change.
-static bool fingerDown = false, wakeTap = false;
+// A button fires only after it has been held for HOLD_MS (a bar fills to
+// show progress), and only once per press: the finger must lift before
+// anything else can be pressed. Touch drop-outs under 120 ms are ignored.
+static const uint32_t HOLD_MS = 500;
+static bool fingerDown = false, fired = false;
 static BtnId pressedId = B_NONE;
 static int16_t lastX = 0, lastY = 0;
-static uint32_t lastRawTouch = 0, ignoreUntil = 0;
+static uint32_t lastRawTouch = 0, pressStart = 0;
+static int lastBar = -1;
+
+void cancelPress() {
+  const Btn *b = findBtn(pressedId);
+  if (b) {
+    highlight(*b, false);
+    lcd.fillRect(b->x + 10, b->y + b->h - 6, b->w - 20, 3, b->id >= B_ROW0 && b->id <= B_ROW3 ? C_CARD
+                 : (b->id == B_ALL ? C_ACCENT : (b->id == B_STOP ? C_STOP : C_CARD)));
+  }
+  pressedId = B_NONE;
+}
 
 void handleTouch(uint32_t now) {
-  int16_t x, y;
-  if (readTouch(x, y)) {
+  int16_t rx, ry;
+  if (readTouch(rx, ry)) {
     lastRawTouch = now;
-    lastX = constrain(x, 0, 239);
-    lastY = constrain(y, 0, 239);
+    mapTouch(rx, ry, lastX, lastY);
   }
-  bool down = lastRawTouch && (now - lastRawTouch < 80);
+  bool down = lastRawTouch && (now - lastRawTouch < 120);
 
   if (down && !fingerDown) {                 // finger went down
     fingerDown = true;
+    fired = false;
     lastActivity = now;
     pressedId = B_NONE;
-    if (!screenOn) { setBacklight(true); wakeTap = true; return; }
-    if ((int32_t)(now - ignoreUntil) < 0) return;
+    if (!screenOn) { setBacklight(true); fired = true; return; }   // wake only
     if (screen == TOUCHTEST) { touchTestPoint(lastX, lastY); return; }
     const Btn *b = hitTest(lastX, lastY);
-    if (b && b->enabled) { pressedId = b->id; highlight(*b, true); }
+    if (b && b->enabled) {
+      pressedId = b->id;
+      pressStart = now;
+      lastBar = -1;
+      highlight(*b, true);
+    }
   } else if (down) {                         // finger held
     lastActivity = now;
-    if (screen == TOUCHTEST) touchTestPoint(lastX, lastY);
-  } else if (fingerDown) {                   // finger lifted
-    fingerDown = false;
-    if (wakeTap) { wakeTap = false; return; }
-    if (pressedId == B_NONE) return;
+    if (screen == TOUCHTEST) { touchTestPoint(lastX, lastY); return; }
+    if (pressedId == B_NONE || fired) return;
     const Btn *b = findBtn(pressedId);
     const Btn *at = hitTest(lastX, lastY);
-    BtnId id = pressedId;
-    pressedId = B_NONE;
-    if (b && at && at->id == id) {
-      activate(id);
-      ignoreUntil = millis() + 250;
-    } else if (b) {
-      highlight(*b, false);                  // slid off: cancel
+    if (!b || !at || at->id != pressedId) { cancelPress(); return; }   // slid off
+    uint32_t held = now - pressStart;
+    int bar = (int)((b->w - 20) * min(held, HOLD_MS) / HOLD_MS);
+    if (bar != lastBar) {
+      lastBar = bar;
+      lcd.fillRect(b->x + 10, b->y + b->h - 6, bar, 3, C_TEXT);
     }
+    if (held >= HOLD_MS) {
+      fired = true;
+      BtnId id = pressedId;
+      pressedId = B_NONE;
+      activate(id);
+    }
+  } else if (fingerDown) {                   // finger lifted
+    fingerDown = false;
+    if (pressedId != B_NONE && !fired) cancelPress();   // let go too early
+    pressedId = B_NONE;
   }
 }
 
@@ -657,6 +783,8 @@ void setup() {
   durIdx = prefs.getUChar("dur", 2) % (sizeof(DURATIONS) / sizeof(DURATIONS[0]));
 
   initAudio();
+  bool haveCal = prefs.getBytesLength("cal") == sizeof(cal) &&
+                 prefs.getBytes("cal", cal, sizeof(cal)) == sizeof(cal);
   if (!touchOk) {
     lcd.fillScreen(C_BG);
     lcd.setTextColor(C_STOP, C_BG);
@@ -668,7 +796,12 @@ void setup() {
     lcd.drawString("unplug USB and power on again", 120, 150);
     delay(5000);
   }
-  drawList();
+  if (touchOk && !haveCal && runCalibration()) {
+    screen = TOUCHTEST;                     // let the user check the result
+    drawTouchTest();
+  } else {
+    drawList();
+  }
   lastActivity = millis();
 }
 
@@ -684,8 +817,8 @@ void loop() {
     if (!vibeActive) drv.setRealtimeValue(0);
   }
 
-  // side button: short press = screen on/off (or leave touch test),
-  // hold ~2 s = touch test screen, hold 6 s = power off
+  // side button: short press = screen on/off (or leave the alignment check),
+  // hold ~2 s = redo touch alignment, hold 6 s = power off
   if (now - lastPmuPoll > 100) {
     lastPmuPoll = now;
     pmu.getIrqStatus();
@@ -695,10 +828,12 @@ void loop() {
       else setBacklight(!screenOn);
     }
     if (pmu.isPekeyLongPressIrq() && screen != PLAYER) {
-      lastActivity = now;
       setBacklight(true);
-      screen = TOUCHTEST;
-      drawTouchTest();
+      if (runCalibration()) { screen = TOUCHTEST; drawTouchTest(); }
+      else { screen = LIST; drawList(); }
+      lastActivity = millis();
+      fingerDown = false; pressedId = B_NONE; lastRawTouch = 0;
+      pmu.clearIrqStatus();
     }
     pmu.clearIrqStatus();
   }
