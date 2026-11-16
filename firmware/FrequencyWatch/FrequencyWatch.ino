@@ -851,7 +851,7 @@ void loop() {
 
   // timing / auto-advance
   if (screen == PLAYER && curItem >= 0) {
-    if (now - startMs >= durMs) {
+    if (millis() - startMs >= durMs) {     // fresh time: startItem() may have just run
       if (playAll && curItem + 1 < L().count) startItem(curItem + 1);
       else stopPlayback();
     } else if (screenOn) {
