@@ -838,7 +838,7 @@ void loop() {
     pmu.clearIrqStatus();
   }
 
-  if (screenOn && screen != TOUCHTEST && now - lastActivity > SCREEN_TIMEOUT) setBacklight(false);
+  if (screenOn && screen != TOUCHTEST && (int32_t)(millis() - lastActivity) > SCREEN_TIMEOUT) setBacklight(false);
 
   // vibration pulses for low frequencies
   if (vibeActive) {
