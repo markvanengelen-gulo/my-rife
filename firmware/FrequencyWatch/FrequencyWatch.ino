@@ -203,9 +203,9 @@ float volumeToAmp() { return (volume * volume) / 100.0f * 0.9f; }
 
 // ---------- Vibration ----------
 static bool vibeActive = false, vibeOn = false;
-// Steady: one constant buzz for the whole tone (default).
-// Pulsing: motor switched on/off at the chosen frequency.
-static bool vibeSteady = true;
+// Pulsing (default): motor switched on/off at the chosen frequency.
+// Steady (optional): one constant buzz for the whole tone.
+static bool vibeSteady = false;
 static uint32_t vibeToggleUs = 0, vibeHalfUs = 0;
 
 void vibeWrite(bool on) {
@@ -574,7 +574,7 @@ void activate(BtnId id) {
       break;
     case B_MODE:
       vibeSteady = !vibeSteady;
-      prefs.putBool("steady", vibeSteady);
+      prefs.putBool("vsteady", vibeSteady);
       if (vibeActive) { vibeToggleUs = micros(); vibeWrite(true); }
       drawPlayerStatic();
       drawPlayerProgress();
@@ -830,7 +830,7 @@ void setup() {
   prefs.begin("freqwatch", false);
   volume = constrain(prefs.getUChar("vol", 5), 1, 10);
   durIdx = prefs.getUChar("dur", 2) % (sizeof(DURATIONS) / sizeof(DURATIONS[0]));
-  vibeSteady = prefs.getBool("steady", true);
+  vibeSteady = prefs.getBool("vsteady", false);
   if (!prefs.getBool("gauge", false) && pmu.isBatteryConnect() &&
       pmu.writeGaugeData(BATTERY_PARAMS_470mAh, sizeof(BATTERY_PARAMS_470mAh))) {
     prefs.putBool("gauge", true);
