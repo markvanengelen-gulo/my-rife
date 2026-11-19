@@ -7,7 +7,7 @@ Open `https://markvanengelen-gulo.github.io/my-rife/flash.html` in **Chrome or E
 
 ## What it does
 - **40 Hz and up:** sine tone through the speaker (MAX98357A amplifier), generated at 96 kHz with an exact 32-bit phase accumulator (no frequency drift). Realistically audible from a few hundred Hz to roughly 15 kHz on a speaker this small.
-- **Below 40 Hz:** the vibration motor (DRV2605) pulses on/off at that rate, since no watch speaker can reproduce those frequencies.
+- **Below 40 Hz:** the vibration motor (DRV2605) is used, since no watch speaker can reproduce those frequencies. Default is a **steady** constant vibration; the player screen has a button to switch to **pulsing** (motor switched on/off at the chosen rate). The choice is remembered.
 - **Radio silent:** the LoRa radio's power rail (AXP2101 ALDO4) is switched off; WiFi and Bluetooth are never started (their start-up code isn't linked into the firmware at all).
 - Battery charging is limited to 100 mA, per LilyGO's guidance to stay under 130 mA.
 - Volume and tone length are remembered between restarts.

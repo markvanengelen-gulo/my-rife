@@ -203,6 +203,9 @@ float volumeToAmp() { return (volume * volume) / 100.0f * 0.9f; }
 
 // ---------- Vibration ----------
 static bool vibeActive = false, vibeOn = false;
+// Steady: one constant buzz for the whole tone (default).
+// Pulsing: motor switched on/off at the chosen frequency.
+static bool vibeSteady = true;
 static uint32_t vibeToggleUs = 0, vibeHalfUs = 0;
 
 void vibeWrite(bool on) {
@@ -272,7 +275,7 @@ String hzText(float hz) {
 // and to decide what a tap hit, so what you see is exactly what you can press.
 enum BtnId : uint8_t {
   B_NONE, B_PREV, B_NEXTLIST, B_TITLE, B_ROW0, B_ROW1, B_ROW2, B_ROW3,
-  B_UP, B_DOWN, B_TIME, B_ALL, B_STOP, B_VOLDN, B_VOLUP, B_SKIP, B_EXIT
+  B_UP, B_DOWN, B_TIME, B_ALL, B_STOP, B_VOLDN, B_VOLUP, B_SKIP, B_EXIT, B_MODE
 };
 struct Btn { int16_t x, y, w, h; BtnId id; bool enabled; };
 static Btn btns[12];
@@ -402,12 +405,22 @@ void drawPlayerStatic() {
   lcd.setFont(&fonts::Font7);
   String hz = hzText(f.hz);
   lcd.setTextSize(hz.length() > 4 ? 0.8f : 1.0f);
-  lcd.drawString(hz, 120, 56);
+  bool vib = f.hz < VIBE_BELOW_HZ;
+  lcd.drawString(hz, 120, vib ? 50 : 56);
   lcd.setTextSize(1);
   lcd.setFont(&fonts::Font2);
   lcd.setTextColor(C_MUTED, C_BG);
-  const char *how = f.hz < VIBE_BELOW_HZ ? "Hz - vibration" : (f.hz > 18000 ? "Hz - above most speakers" : "Hz - speaker");
-  lcd.drawString(how, 120, 90);
+  if (vib) {
+    // vibration items: a button to switch between steady and pulsing
+    char m[28];
+    if (vibeSteady) snprintf(m, sizeof(m), "Vibration: steady");
+    else snprintf(m, sizeof(m), "Vibration: pulsing");
+    drawBtn(30, 78, 180, 28, m, C_CARD, C_TEXT);
+    addBtn(30, 78, 180, 28, B_MODE);
+  } else {
+    const char *how = f.hz > 18000 ? "Hz - above most speakers" : "Hz - speaker";
+    lcd.drawString(how, 120, 90);
+  }
 
   // label (up to two lines)
   lcd.setTextColor(C_TEXT, C_BG);
@@ -420,8 +433,10 @@ void drawPlayerStatic() {
     l2.trim();
     if (l2.length() > 28) l2 = l2.substring(0, 27) + ".";
   }
-  lcd.drawString(l1, 120, 110);
-  if (l2.length()) lcd.drawString(l2, 120, 127);
+  lcd.setTextColor(C_TEXT, C_BG);
+  lcd.setTextDatum(middle_center);
+  lcd.drawString(l1, 120, vib ? 116 : 110);
+  if (l2.length()) lcd.drawString(l2, 120, vib ? 132 : 127);
 
   // volume bar
   lcd.setFont(&fonts::Font0);
@@ -507,7 +522,7 @@ void startItem(int i) {
     vibeActive = true;
     vibeHalfUs = (uint32_t)(500000.0f / f.hz);
     vibeToggleUs = micros();
-    vibeWrite(true);
+    vibeWrite(true);                 // steady mode simply stays on
   } else {
     g_freq = f.hz;
     g_amp = volumeToAmp();
@@ -554,6 +569,13 @@ void activate(BtnId id) {
       saveSettings();
       if (g_tone) g_amp = volumeToAmp();
       if (vibeActive && vibeOn) vibeWrite(true);
+      drawPlayerStatic();
+      drawPlayerProgress();
+      break;
+    case B_MODE:
+      vibeSteady = !vibeSteady;
+      prefs.putBool("steady", vibeSteady);
+      if (vibeActive) { vibeToggleUs = micros(); vibeWrite(true); }
       drawPlayerStatic();
       drawPlayerProgress();
       break;
@@ -808,6 +830,7 @@ void setup() {
   prefs.begin("freqwatch", false);
   volume = constrain(prefs.getUChar("vol", 5), 1, 10);
   durIdx = prefs.getUChar("dur", 2) % (sizeof(DURATIONS) / sizeof(DURATIONS[0]));
+  vibeSteady = prefs.getBool("steady", true);
   if (!prefs.getBool("gauge", false) && pmu.isBatteryConnect() &&
       pmu.writeGaugeData(BATTERY_PARAMS_470mAh, sizeof(BATTERY_PARAMS_470mAh))) {
     prefs.putBool("gauge", true);
@@ -872,7 +895,7 @@ void loop() {
   if (screenOn && screen != TOUCHTEST && (int32_t)(millis() - lastActivity) > SCREEN_TIMEOUT) setBacklight(false);
 
   // vibration pulses for low frequencies
-  if (vibeActive) {
+  if (vibeActive && !vibeSteady) {
     uint32_t us = micros();
     if (us - vibeToggleUs >= vibeHalfUs) {
       vibeToggleUs += vibeHalfUs;
