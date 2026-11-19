@@ -41,6 +41,9 @@ esptool.py --chip esp32s3 merge_bin -o build/FrequencyWatch-merged.bin --flash_m
   0x0 FrequencyWatch.ino.bootloader.bin 0x8000 FrequencyWatch.ino.partitions.bin 0xe000 boot_app0.bin 0x10000 FrequencyWatch.ino.bin
 ```
 
+## Battery shows "no batt" or 0%
+The T-Watch S3 has a small battery switch on the circuit board, under the back cover. It ships in the OFF position, so the battery is disconnected until you slide it to ON.
+
 ## If something looks off
 Pins come from LilyGO's official T-Watch S3 hardware reference. The firmware compiles cleanly but hasn't been run on a watch yet. Settings at the top of `FrequencyWatch.ino` fix the likely first-run issues:
 - Red and blue swapped → `DISPLAY_RGB_ORDER 1`
